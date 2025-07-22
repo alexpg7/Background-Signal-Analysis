@@ -53,7 +53,7 @@ The strategy is the following:
 1. Train the Neural Network with half of the Montecarlo sample assigning 1 to the Background and 0 to the Signal.
 2. Check if the training has been succesful comparing with the other half.
 3. Define $T_{cut}$ with a hypothesis testing.
-4. Obtain the output values $T$ for the dataset and mask the with $T<T_{cut}$.
+4. Obtain the output values $T$ for the dataset and mask them with $T<T_{cut}$.
 5. plot the resulting data and compare it with the Montecarlo sample.
 
 
@@ -163,4 +163,210 @@ plt.show()
 ## 🤔Hypothesis Testing
 
 Now that our Neural Network is trained, we want to study the probability of a certain value being assigned as **Background** or **Signal**.
-Luckily, since we have the Montecarlo samples, we can extract from our previous knowledge the (approximate) _pdf_'s corresponding to those cases, $\rho(T|S)$ and $\rho(T|B)$.
+Luckily, since we have the Montecarlo samples, we can extract from our previous knowledge the (approximate) _pdf_'s corresponding to those cases, $\rho(T|S)$ and $\rho(T|B)$. The corresponding _pdf_'s can be identified as the normalized histograms of the **Background** and **Signal** samples:
+
+```python
+# define the pdfs
+by = plt.hist(Back, bins = nbins, color = 'red', alpha = 0.6, label = r'Estimated background pdf $\rho(T|B)$', density = True)[0]
+bx = np.histogram(Back, bins=nbins)[1]
+sy = plt.hist(Signal, bins = nbins,color = 'blue', alpha = 0.6, label = r'Estimated signal pdf $\rho(T|S)$', density = True)[0]
+sx = np.histogram(Signal, bins = nbins)[1]
+```
+
+From now on, we will treat all the data as signal when its $T$ value (assigned by the Neural Network) is below $T_{cut}$ and vicebersa:
+
+```math
+\begin{align}
+(x,y)="\text{signal}"\Leftrightarrow T(x,y) \in (-\infty,T_{cut})\\
+(x,y)="\text{background}"\Leftrightarrow T(x,y) \in (T_{cut},+\infty)
+\end{align}
+```
+
+We define $\alpha$ as the probability of a signal being incorrectly labeled as **Background**. $\alpha = P(B|S)$. That is, the following expression:
+
+```math
+\alpha = \int_{T_{cut}}^{+\infty}\rho(T|S)dT
+```
+
+The idea is fixing $\alpha$ to a low probability, for example, $0.05$ ($5$%). So, we will integrate the **Signal** _pdf_ until the area reaches $\alpha = 0.05$. The value where $T$ stops integrating is $T_{cut}$ (the integration is being done summing the heights multiplied by the bin length):
+
+```python
+# integrate the background pdf from the upper limit until the area is 0.05
+alpha = 0.05
+summ = 0
+for j in range(len(sy) - 1, 0 - 1, -1):
+    summ += sy[j] * (np.max(sx) - np.min(sx)) / nbins
+    i = j
+    if summ > alpha:
+        break
+# print the corresponding T_{cut}
+print('Area = {}\nTcut = {}'.format(summ, sx[i]))
+
+# plot the T_{cut} line
+plt.axvline(sx[i], color = 'cyan', label = 'Tcut={:.2}'.format(sx[i]))
+Tcut = sx[i]
+plt.legend(loc = 'best')
+plt.xlabel(r"Output value $T$")
+plt.ylabel(r"Probability density $\rho$")
+plt.show()
+```
+![til](./Figures/pdfs.png)
+* $\alpha = 0.0514$
+* $T_{cut} = 0.630$
+
+So, when classifying our data, we will say it is **Background** whenever its $T$ value is over $T_{cut}$.
+
+### 💪Power of the Test
+
+The power is a value that allows us to evaluate how much **Background** are we really eliminating by using a certain $T_{cut}$. The probability $\beta$ of wrongly classifying as **Signal** a **Background** value is:
+
+```math
+\beta=\int_{-\infty}^{T_{cut}}\rho(T|B)dT
+```
+
+So, the complementary probability $(1-\beta)$ gives us the probability of correctly assigning as **Background** a **Background** data.
+
+```python
+# calculate power
+beta = 0
+for j in range(0,i):
+    beta += by[j] * (np.max(bx) - np.min(bx)) / nbins
+print('Power = {}'.format(1 - beta))
+
+# calculate the areas below Tcut
+Sarea = 0
+Barea = 0
+for i in range(0,100000):
+    if sx[i] >= Tcut and by[i] >= Tcut:
+        break
+    Sarea += sy[i] * (np.max(sx) - np.min(sx)) / nbins
+    Barea += by[i] * (np.max(bx) - np.min(bx)) / nbins
+
+print('Signal area = {}\nBackground area = {}'.format(Sarea, Barea))
+```
+
+* $1-\beta =0.574$
+* Signal area $= 0.954$
+* Background area $= 0.434$
+
+The conclusion is that our Neural Network is capable of eliminating $57.4$% of the **Background**!
+
+## 📈Data Analysis
+
+Now, we are ready to analyze our sample ``data.txt``.
+
+First, we get the $T$ values by applying the ``.predict()`` method to our ``data``. The data assigned as **Signal** will be the one which is below $T_{cut}$, so we apply the corresponding mask.
+
+```python
+# predict T with the Neural Network
+Fdata = mlp.predict(data)
+Sdata = Fdata[Fdata < Tcut]
+```
+
+We can see the plot of the filtered data, it works as it should.
+
+```python
+dy = plt.hist(Fdata, bins = nbins, color = 'red', label = 'Real data', alpha = 0.6)[0]
+dx = np.histogram(Fdata, bins = nbins)[1]
+
+bins2 = int((np.max(Sdata) - np.min(Sdata)) / ((np.max(Fdata) - np.min(Fdata)) / nbins))
+Dy = plt.hist(Sdata, bins = bins2, color = 'blue', label = 'Filtered data', alpha = 0.6)[0]
+Dx = np.histogram(Sdata, bins = nbins)[1]
+
+plt.xlabel(r'Output value $T$')
+plt.ylabel(r'Count')
+plt.legend()
+plt.show()
+```
+
+![til](./Figures/filtered.png)
+
+Finally, we can plot the full ``data.txt`` sample and the filtered subsample. Using the ``gaussian_kde`` funciton to color it by density.
+
+```python
+realx=data.transpose()[0]
+realy=data.transpose()[1]
+xy = np.vstack([realx,realy])
+
+# sort by color/density
+z = gaussian_kde(xy)(xy)
+idx = z.argsort()
+realx, realy, z = realx[idx], realy[idx], z[idx]
+fig, ax = plt.subplots()
+Real=ax.scatter(realx, realy, c=z, s=10)
+
+# plot
+plt.title('Measured data')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.show()
+
+#select the signal without the background
+filtx=np.array([])
+filty=np.array([])
+for i in range(0,int(Fdata.size)):
+    if Fdata[i]<Tcut:
+        filtx=np.append(filtx,data[i,0])
+        filty=np.append(filty,data[i,1])
+
+#calculate density
+xy = np.vstack([filtx,filty])
+
+#sort by color/density
+z = gaussian_kde(xy)(xy)
+idx = z.argsort()
+filtx, filty, z = filtx[idx], filty[idx], z[idx]
+fig, ax = plt.subplots()
+Filtered=ax.scatter(filtx, filty, c=z, s=10)
+
+# plot
+plt.title('Filtered data')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.show()
+```
+
+<img src="./Figures/measured_data.png" alt="Alt text" width="440" height="340"/> <img src="./Figures/filtered_data.png" alt="Alt text" width="440" height="340"/>
+
+### 📊Plotting the Montecarlo sample
+
+Just by curiosity, we can also plot the Montecarlo-generated sample
+```python
+# background montecarlo
+Backgroundx = MCb[0]
+Backgroundy = MCb[1]
+xy = np.vstack([Backgroundx,Backgroundy])
+
+# sort by color/density
+z = gaussian_kde(xy)(xy)
+idx = z.argsort()
+Backgroundx, Backgroundy, z = Backgroundx[idx], Backgroundy[idx], z[idx]
+fig, ax = plt.subplots()
+Real = ax.scatter(Backgroundx, Backgroundy, c = z, s = 10)
+
+# plot
+plt.title('Background Montecarlo')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.show()
+
+# signal montecarlo
+Signalx = MCs[0]
+Signaly = MCs[1]
+xy = np.vstack([Signalx,Signaly])
+
+# sort by color/density
+z = gaussian_kde(xy)(xy)
+idx = z.argsort()
+Signalx, Signaly, z = Signalx[idx], Signaly[idx], z[idx]
+fig, ax = plt.subplots()
+Filtered = ax.scatter(Signalx, Signaly, c = z, s = 10)
+
+# plot
+plt.title('Signal Montecarlo')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.show()
+```
+
+<img src="./Figures/b_montecarlo.png" alt="Alt text" width="440" height="340"/> <img src="./Figures/s_montecarlo.png" alt="Alt text" width="440" height="340"/>
